@@ -26,7 +26,7 @@ jobs:
       with:
         context: ./backend
         push: true
-        tags: ${{ secrets.REGISTRY }}/backend:${{ github.sha }}
+        tags: ${{ secrets.REGISTRY }}backend:${{ github.sha }}
 
     - name: Build & push frontend image
       uses: docker/build-push-action@v4
@@ -49,8 +49,8 @@ jobs:
 
     - name: Update k8s images and deploy
       run: |
-        kubectl -n myapp set image deployment/backend backend=${{ secrets.REGISTRY }}/my-backend:${{ github.sha }} --record || true
-        kubectl -n myapp set image deployment/frontend frontend=${{ secrets.REGISTRY }}/my-frontend:${{ github.sha }} --record || true
+        kubectl -n myapp set image deployment/backend backend=${{ secrets.REGISTRY }}/backend:${{ github.sha }} --record || true
+        kubectl -n myapp set image deployment/frontend frontend=${{ secrets.REGISTRY }}/frontend:${{ github.sha }} --record || true
         # if first deploy, apply manifests
         kubectl apply -f k8s/namespace.yaml || true
         kubectl apply -f k8s/secret.yaml || true
