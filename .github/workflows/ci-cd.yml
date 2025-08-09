@@ -39,19 +39,31 @@ jobs:
       with:
         version: 'latest'
 
-    # Configure kubeconfig from GitHub secret
+    # Configure kubeconfig (auto-detect base64 or YAML)
     - name: Configure kubeconfig
       run: |
-        echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
         mkdir -p $HOME/.kube
-        mv kubeconfig $HOME/.kube/config
+        if echo "${{ secrets.KUBE_CONFIG }}" | grep -q "apiVersion:"; then
+          echo "Detected raw kubeconfig YAML"
+          echo "${{ secrets.KUBE_CONFIG }}" > $HOME/.kube/config
+        else
+          echo "Detected base64-encoded kubeconfig"
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
+        fi
         chmod 600 $HOME/.kube/config
+        echo "Kubeconfig configured successfully"
+
+    # Debug cluster connection
+    - name: Test Kubernetes connection
+      run: |
+        kubectl version --short
+        kubectl get nodes
 
     # Update Kubernetes backend deployment & apply manifests
     - name: Update k8s images and deploy
       run: |
         kubectl -n myapp set image deployment/backend backend=${{ secrets.DOCKER_USERNAME }}/backend:${{ github.sha }} --record || true
-        # if first deploy, apply manifests
+        # If first deploy, apply manifests
         kubectl apply -f k8s/namespace.yaml || true
         kubectl apply -f k8s/secret.yaml || true
         kubectl apply -f k8s/mysql-pvc.yaml || true
