@@ -5,53 +5,57 @@ on:
     branches: [ main, master ]
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+    - name: Checkout
+      uses: actions/checkout@v4
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-          
+    - name: Set up Qemu
+      uses: docker/setup-buildx-action@v2
 
-      - name: Build & push backend image
-        uses: docker/build-push-action@v4
-        with:
-          context: ./backend
-          push: true
-          tags: ${{ secrets.REGISTRY }}/my-backend:${{ github.sha }}
+    - name: Login to registry
+      uses: docker/login-action@v2
+      with:
+        registry: ${{ secrets.REGISTRY }}
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build & push frontend image
-        uses: docker/build-push-action@v4
-        with:
-          context: ./frontend
-          push: true
-          tags: ${{ secrets.REGISTRY }}/my-frontend:${{ github.sha }}
+    - name: Build & push backend image
+      uses: docker/build-push-action@v4
+      with:
+        context: ./backend
+        push: true
+        tags: ${{ secrets.REGISTRY }}/backend:${{ github.sha }}
 
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v3
-        with:
-          version: 'latest'
+    - name: Build & push frontend image
+      uses: docker/build-push-action@v4
+      with:
+        context: ./frontend
+        push: true
+        tags: ${{ secrets.REGISTRY }}/latest:${{ github.sha }}
 
-      - name: Configure kubeconfig
-        run: |
-          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
-          mkdir -p $HOME/.kube
-          mv kubeconfig $HOME/.kube/config
-          chmod 600 $HOME/.kube/config
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
 
-      - name: Update k8s images and deploy
-        run: |
-          kubectl -n myapp set image deployment/backend backend=${{ secrets.REGISTRY }}/my-backend:${{ github.sha }} --record || true
-          kubectl -n myapp set image deployment/frontend frontend=${{ secrets.REGISTRY }}/my-frontend:${{ github.sha }} --record || true
-          # if first deploy, apply manifests
-          kubectl apply -f k8s/namespace.yaml || true
-          kubectl apply -f k8s/secret.yaml || true
-          kubectl apply -f k8s/mysql-pvc.yaml || true
-          kubectl apply -f k8s/mysql-deployment.yaml || true
-          kubectl apply -f k8s/backend-deployment.yaml || true
-          kubectl apply -f k8s/frontend-deployment.yaml || true
-          kubectl apply -f k8s/ingress.yaml || true
+    - name: Configure kubeconfig
+      run: |
+        echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
+        mkdir -p $HOME/.kube
+        mv kubeconfig $HOME/.kube/config
+        chmod 600 $HOME/.kube/config
+
+    - name: Update k8s images and deploy
+      run: |
+        kubectl -n myapp set image deployment/backend backend=${{ secrets.REGISTRY }}/my-backend:${{ github.sha }} --record || true
+        kubectl -n myapp set image deployment/frontend frontend=${{ secrets.REGISTRY }}/my-frontend:${{ github.sha }} --record || true
+        # if first deploy, apply manifests
+        kubectl apply -f k8s/namespace.yaml || true
+        kubectl apply -f k8s/secret.yaml || true
+        kubectl apply -f k8s/mysql-pvc.yaml || true
+        kubectl apply -f k8s/mysql-deployment.yaml || true
+        kubectl apply -f k8s/backend-deployment.yaml || true
+        kubectl apply -f k8s/frontend-deployment.yaml || true
+        kubectl apply -f k8s/ingress.yaml || true
