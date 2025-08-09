@@ -26,14 +26,14 @@ jobs:
       with:
         context: ./backend
         push: true
-        tags: ${{ secrets.REGISTRY }}backend:${{ github.sha }}
+        tags: ${{ secrets.REGISTRY }}/backend:${{ github.sha }}
 
     - name: Build & push frontend image
       uses: docker/build-push-action@v4
       with:
         context: ./frontend
         push: true
-        tags: ${{ secrets.REGISTRY }}/latest:${{ github.sha }}
+        tags: ${{ secrets.REGISTRY }}/frontend:${{ github.sha }}
 
     - name: Set up kubectl
       uses: azure/setup-kubectl@v3
