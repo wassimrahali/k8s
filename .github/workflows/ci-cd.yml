@@ -27,8 +27,6 @@ jobs:
         push: true
         tags: ${{ secrets.DOCKER_USERNAME }}/backend:${{ github.sha }}
 
-   
-
     - name: Set up kubectl
       uses: azure/setup-kubectl@v3
       with:
@@ -44,12 +42,10 @@ jobs:
     - name: Update k8s images and deploy
       run: |
         kubectl -n myapp set image deployment/backend backend=${{ secrets.DOCKER_USERNAME }}/backend:${{ github.sha }} --record || true
-        kubectl -n myapp set image deployment/frontend frontend=${{ secrets.DOCKER_USERNAME }}/frontend:${{ github.sha }} --record || true
         # if first deploy, apply manifests
         kubectl apply -f k8s/namespace.yaml || true
         kubectl apply -f k8s/secret.yaml || true
         kubectl apply -f k8s/mysql-pvc.yaml || true
         kubectl apply -f k8s/mysql-deployment.yaml || true
         kubectl apply -f k8s/backend-deployment.yaml || true
-        kubectl apply -f k8s/frontend-deployment.yaml || true
         kubectl apply -f k8s/ingress.yaml || true
