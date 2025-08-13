@@ -53,10 +53,12 @@ jobs:
         chmod 600 $HOME/.kube/config
         echo "Kubeconfig configured successfully"
 
-    # Debug cluster connection
+    # Debug cluster connection (new syntax, works on all kubectl versions)
     - name: Test Kubernetes connection
       run: |
-        kubectl version --short
+        echo "Client Version:"
+        kubectl version --client=true
+        echo "Cluster Nodes:"
         kubectl get nodes
 
     # Update Kubernetes backend deployment & apply manifests
