@@ -1,13 +1,26 @@
-# frontend/Dockerfile (multistage)
-FROM node:18-alpine as builder
-WORKDIR /app
-COPY package*.json angular.json tsconfig.app.json tsconfig.json ./  
-COPY src ./src
-RUN npm ci
-RUN npx ng build --output-path=dist --configuration=production
+# ---------- Builder ----------
+FROM node:18-alpine AS builder
 
+WORKDIR /app
+
+# Copy dependency manifests first (cache-friendly)
+COPY package.json package-lock.json ./
+
+RUN npm ci
+
+# Copy the rest of the Angular project
+COPY angular.json ./
+COPY tsconfig*.json ./
+COPY .browserslistrc ./
+COPY src ./src
+
+# Build production bundle
+RUN npx ng build --configuration=production
+
+# ---------- Runtime ----------
 FROM nginx:stable-alpine
+
 COPY --from=builder /app/dist /usr/share/nginx/html
-# optional: simple nginx default; keep port 80
+
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
