@@ -54,6 +54,8 @@ jobs:
           echo "Kubeconfig configured successfully"
 
       # Fix kubeconfig API server URL (avoid localhost:8080)
+      # NOTE: Replace YOUR_REAL_K8S_API_SERVER with your actual Kubernetes API server URL
+      # Example: https://k8s-api.example.com:6443 or use environment variable
       - name: Fix kubeconfig API server URL
         run: |
           CONFIG_PATH="$HOME/.kube/config"
