@@ -58,6 +58,18 @@ app.get('/api/notes', async (req, res) => {
 app.post('/api/notes', async (req, res) => {
   const { text } = req.body;
   if (!text) return res.status(400).json({ error: 'text required' });
+  
+  // Input validation
+  if (typeof text !== 'string') {
+    return res.status(400).json({ error: 'text must be a string' });
+  }
+  if (text.length > 255) {
+    return res.status(400).json({ error: 'text too long (max 255 characters)' });
+  }
+  if (text.trim().length === 0) {
+    return res.status(400).json({ error: 'text cannot be empty' });
+  }
+  
   try {
     const [result] = await pool.query('INSERT INTO notes (text) VALUES (?)', [text]);
     res.status(201).json({ id: result.insertId, text });
