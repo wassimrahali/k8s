@@ -33,14 +33,22 @@ jobs:
             ${{ secrets.DOCKER_USERNAME }}/backend:${{ github.sha }}
             ${{ secrets.DOCKER_USERNAME }}/backend:latest
 
+      # Skip Kubernetes steps if no kubeconfig is provided
+      - name: Skip Kubernetes steps when kubeconfig is missing
+        if: ${{ secrets.KUBE_CONFIG == '' }}
+        run: |
+          echo "KUBE_CONFIG secret is empty; skipping kubectl setup and deploy steps."
+
       # Set up kubectl
       - name: Set up kubectl
+        if: ${{ secrets.KUBE_CONFIG != '' }}
         uses: azure/setup-kubectl@v3
         with:
           version: 'latest'
 
       # Configure kubeconfig (auto-detect base64 or YAML)
       - name: Configure kubeconfig
+        if: ${{ secrets.KUBE_CONFIG != '' }}
         run: |
           mkdir -p $HOME/.kube
           if echo "${{ secrets.KUBE_CONFIG }}" | grep -q "apiVersion:"; then
@@ -54,28 +62,35 @@ jobs:
           echo "Kubeconfig configured successfully"
 
       # Fix kubeconfig API server URL (avoid localhost:8080)
-      # NOTE: Replace YOUR_REAL_K8S_API_SERVER with your actual Kubernetes API server URL
-      # Example: https://k8s-api.example.com:6443 or use environment variable
       - name: Fix kubeconfig API server URL
+        if: ${{ secrets.KUBE_CONFIG != '' }}
+        env:
+          REAL_API_SERVER: ${{ secrets.KUBE_API_SERVER }}
         run: |
           CONFIG_PATH="$HOME/.kube/config"
-          REAL_API_SERVER="https://YOUR_REAL_K8S_API_SERVER:6443"
           echo "Original server URL:"
           grep 'server:' $CONFIG_PATH || true
 
-          sed -i "s|server: http://localhost:8080|server: $REAL_API_SERVER|g" $CONFIG_PATH
+          if [ -n "$REAL_API_SERVER" ]; then
+            sed -i "s|server: http://localhost:8080|server: $REAL_API_SERVER|g" $CONFIG_PATH
+            echo "Applied KUBE_API_SERVER override: $REAL_API_SERVER"
+          else
+            echo "KUBE_API_SERVER not provided; leaving kubeconfig server values unchanged."
+          fi
 
           echo "Fixed server URL:"
           grep 'server:' $CONFIG_PATH || true
 
       # Test Kubernetes cluster connection
       - name: Test Kubernetes connection
+        if: ${{ secrets.KUBE_CONFIG != '' }}
         run: |
           kubectl cluster-info
           kubectl get nodes
 
       # Update Kubernetes backend deployment & apply manifests
       - name: Update k8s images and deploy
+        if: ${{ secrets.KUBE_CONFIG != '' }}
         run: |
           kubectl -n myapp set image deployment/backend backend=${{ secrets.DOCKER_USERNAME }}/backend:${{ github.sha }} --record || true
           kubectl apply -f k8s/namespace.yaml || true
@@ -87,6 +102,7 @@ jobs:
 
       # Wait for backend pod to be ready
       - name: Wait for backend pod to be ready
+        if: ${{ secrets.KUBE_CONFIG != '' }}
         run: |
           echo "Waiting for backend deployment to roll out..."
           kubectl -n myapp rollout status deployment/backend --timeout=120s

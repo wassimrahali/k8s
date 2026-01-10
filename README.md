@@ -174,7 +174,7 @@ GitHub Actions workflow (`.github/workflows/ci-cd.yml`) handles:
   - `DOCKER_USERNAME`
   - `DOCKER_PASSWORD`
   - `KUBE_CONFIG` (base64 encoded or raw YAML)
-- Update `YOUR_REAL_K8S_API_SERVER` in the workflow
+- Optional: `KUBE_API_SERVER` if your kubeconfig needs the real API endpoint substituted for localhost entries
 
 ## 📝 Resource Limits
 
