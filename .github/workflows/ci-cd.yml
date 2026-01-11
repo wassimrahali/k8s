@@ -1,4 +1,4 @@
-name: CI/CD
+name: CI/CD with Kind Kubernetes
 
 on:
   push:
@@ -44,65 +44,60 @@ jobs:
             ${{ secrets.DOCKER_USERNAME }}/backend:latest
 
   # -------------------------------
-  # Job 2: Kubernetes deploy
+  # Job 2: Test deployment on Kind (free Kubernetes)
   # -------------------------------
   deploy:
     runs-on: ubuntu-latest
     needs: build
-    if: ${{ secrets.KUBE_CONFIG != '' }}
     steps:
-      # Checkout repo
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      # Set up kubectl
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v3
-        with:
-          version: 'latest'
-
-      # Configure kubeconfig
-      - name: Configure kubeconfig
+      # Install kind & kubectl
+      - name: Set up kind & kubectl
         run: |
-          mkdir -p $HOME/.kube
-          if echo "${{ secrets.KUBE_CONFIG }}" | grep -q "apiVersion:"; then
-            echo "${{ secrets.KUBE_CONFIG }}" > $HOME/.kube/config
-          else
-            echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
-          fi
-          chmod 600 $HOME/.kube/config
-          echo "Kubeconfig configured successfully"
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.26.0/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
 
-      # Fix kubeconfig server URL if needed
-      - name: Fix kubeconfig API server URL
-        env:
-          REAL_API_SERVER: ${{ secrets.KUBE_API_SERVER }}
+      # Create a temporary Kubernetes cluster in Docker
+      - name: Create Kind cluster
         run: |
-          CONFIG_PATH="$HOME/.kube/config"
-          if [ -n "$REAL_API_SERVER" ]; then
-            sed -i "s|server: http://localhost:8080|server: $REAL_API_SERVER|g" $CONFIG_PATH
-            echo "Applied KUBE_API_SERVER override: $REAL_API_SERVER"
-          fi
+          kind create cluster --name ci-cluster --wait 60s
 
-      # Test Kubernetes connection
-      - name: Test Kubernetes connection
-        run: |
-          kubectl cluster-info
-          kubectl get nodes
+      # Verify cluster
+      - name: Cluster info
+        run: kubectl cluster-info
 
-      # Deploy manifests & update image
-      - name: Deploy backend
+      # Load Docker image into Kind
+      - name: Load backend image into cluster
         run: |
-          IMAGE=${{ secrets.DOCKER_USERNAME }}/backend:${{ needs.build.outputs.image-tag }}
-          kubectl -n myapp set image deployment/backend backend=$IMAGE --record
+          kind load docker-image ${{ secrets.DOCKER_USERNAME }}/backend:${{ needs.build.outputs.image-tag }} --name ci-cluster
+
+      # Deploy Kubernetes manifests
+      - name: Apply manifests
+        run: |
           kubectl apply -f k8s/namespace.yaml
           kubectl apply -f k8s/secret.yaml
           kubectl apply -f k8s/mysql-pvc.yaml
           kubectl apply -f k8s/mysql-deployment.yaml
+          # Replace backend image with the freshly built image
+          kubectl set image deployment/backend backend=${{ secrets.DOCKER_USERNAME }}/backend:${{ needs.build.outputs.image-tag }} --record
           kubectl apply -f k8s/backend-deployment.yaml
           kubectl apply -f k8s/ingress.yaml
 
-      # Wait for backend pod
+      # Wait for backend rollout
       - name: Wait for backend rollout
         run: |
           kubectl -n myapp rollout status deployment/backend --timeout=120s
+
+      # Optional: Run tests against the cluster
+      - name: Run integration tests
+        run: |
+          # Example: run a curl test against the backend service
+          kubectl port-forward -n myapp svc/backend 8080:3000 &
+          sleep 10
+          curl -f http://localhost:8080/health || exit 1
