@@ -5,8 +5,13 @@ on:
     branches: [main, master]
 
 jobs:
-  build-and-deploy:
+  # -------------------------------
+  # Job 1: Build and push Docker image
+  # -------------------------------
+  build:
     runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.set-tag.outputs.image-tag }}
     steps:
       # Checkout repo
       - name: Checkout
@@ -23,6 +28,11 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
+      # Set image tag
+      - name: Set image tag
+        id: set-tag
+        run: echo "image-tag=${GITHUB_SHA}" >> $GITHUB_OUTPUT
+
       # Build & push backend image
       - name: Build & push backend image
         uses: docker/build-push-action@v4
@@ -30,79 +40,69 @@ jobs:
           context: ./backend
           push: true
           tags: |
-            ${{ secrets.DOCKER_USERNAME }}/backend:${{ github.sha }}
+            ${{ secrets.DOCKER_USERNAME }}/backend:${{ steps.set-tag.outputs.image-tag }}
             ${{ secrets.DOCKER_USERNAME }}/backend:latest
 
-      # Skip Kubernetes steps if no kubeconfig is provided
-      - name: Skip Kubernetes steps when kubeconfig is missing
-        if: ${{ secrets.KUBE_CONFIG == '' }}
-        run: |
-          echo "KUBE_CONFIG secret is empty; skipping kubectl setup and deploy steps."
+  # -------------------------------
+  # Job 2: Kubernetes deploy
+  # -------------------------------
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    if: ${{ secrets.KUBE_CONFIG != '' }}
+    steps:
+      # Checkout repo
+      - name: Checkout
+        uses: actions/checkout@v4
 
       # Set up kubectl
       - name: Set up kubectl
-        if: ${{ secrets.KUBE_CONFIG != '' }}
         uses: azure/setup-kubectl@v3
         with:
           version: 'latest'
 
-      # Configure kubeconfig (auto-detect base64 or YAML)
+      # Configure kubeconfig
       - name: Configure kubeconfig
-        if: ${{ secrets.KUBE_CONFIG != '' }}
         run: |
           mkdir -p $HOME/.kube
           if echo "${{ secrets.KUBE_CONFIG }}" | grep -q "apiVersion:"; then
-            echo "Detected raw kubeconfig YAML"
             echo "${{ secrets.KUBE_CONFIG }}" > $HOME/.kube/config
           else
-            echo "Detected base64-encoded kubeconfig"
             echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
           fi
           chmod 600 $HOME/.kube/config
           echo "Kubeconfig configured successfully"
 
-      # Fix kubeconfig API server URL (avoid localhost:8080)
+      # Fix kubeconfig server URL if needed
       - name: Fix kubeconfig API server URL
-        if: ${{ secrets.KUBE_CONFIG != '' }}
         env:
           REAL_API_SERVER: ${{ secrets.KUBE_API_SERVER }}
         run: |
           CONFIG_PATH="$HOME/.kube/config"
-          echo "Original server URL:"
-          grep 'server:' $CONFIG_PATH || true
-
           if [ -n "$REAL_API_SERVER" ]; then
             sed -i "s|server: http://localhost:8080|server: $REAL_API_SERVER|g" $CONFIG_PATH
             echo "Applied KUBE_API_SERVER override: $REAL_API_SERVER"
-          else
-            echo "KUBE_API_SERVER not provided; leaving kubeconfig server values unchanged."
           fi
 
-          echo "Fixed server URL:"
-          grep 'server:' $CONFIG_PATH || true
-
-      # Test Kubernetes cluster connection
+      # Test Kubernetes connection
       - name: Test Kubernetes connection
-        if: ${{ secrets.KUBE_CONFIG != '' }}
         run: |
           kubectl cluster-info
           kubectl get nodes
 
-      # Update Kubernetes backend deployment & apply manifests
-      - name: Update k8s images and deploy
-        if: ${{ secrets.KUBE_CONFIG != '' }}
+      # Deploy manifests & update image
+      - name: Deploy backend
         run: |
-          kubectl -n myapp set image deployment/backend backend=${{ secrets.DOCKER_USERNAME }}/backend:${{ github.sha }} --record || true
-          kubectl apply -f k8s/namespace.yaml || true
-          kubectl apply -f k8s/secret.yaml || true
-          kubectl apply -f k8s/mysql-pvc.yaml || true
-          kubectl apply -f k8s/mysql-deployment.yaml || true
-          kubectl apply -f k8s/backend-deployment.yaml || true
-          kubectl apply -f k8s/ingress.yaml || true
+          IMAGE=${{ secrets.DOCKER_USERNAME }}/backend:${{ needs.build.outputs.image-tag }}
+          kubectl -n myapp set image deployment/backend backend=$IMAGE --record
+          kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/secret.yaml
+          kubectl apply -f k8s/mysql-pvc.yaml
+          kubectl apply -f k8s/mysql-deployment.yaml
+          kubectl apply -f k8s/backend-deployment.yaml
+          kubectl apply -f k8s/ingress.yaml
 
-      # Wait for backend pod to be ready
-      - name: Wait for backend pod to be ready
-        if: ${{ secrets.KUBE_CONFIG != '' }}
+      # Wait for backend pod
+      - name: Wait for backend rollout
         run: |
-          echo "Waiting for backend deployment to roll out..."
           kubectl -n myapp rollout status deployment/backend --timeout=120s
