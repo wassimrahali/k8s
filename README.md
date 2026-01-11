@@ -176,6 +176,17 @@ GitHub Actions workflow (`.github/workflows/ci-cd.yml`) handles:
   - `KUBE_CONFIG` (base64 encoded or raw YAML)
 - Optional: `KUBE_API_SERVER` if your kubeconfig needs the real API endpoint substituted for localhost entries
 
+### Why kubectl points to localhost:8080 in CI
+
+When kubectl cannot load a kubeconfig (missing `KUBECONFIG`, no `~/.kube/config`, or an empty file), it falls back to its compiled-in default context, which points to `http://localhost:8080`. GitHub-hosted runners do not run a Kubernetes API server on localhost, so any `kubectl` call without a real kubeconfig fails with `The connection to the server localhost:8080 was refused`. (The in-cluster service account path is only used when kubectl runs inside a pod.)
+
+### 100% free CI-only Kubernetes test (Kind)
+
+Use the provided workflow `.github/workflows/kind-e2e.yml` to spin up an ephemeral Kind cluster **inside GitHub Actions** with no external cloud costs or secrets:
+1. Trigger the workflow via **pull_request** or **workflow_dispatch**.
+2. The workflow installs kubectl, creates a Kind cluster, deploys an `nginx` sample app, waits for rollout, and shows pod/service state.
+3. No kubeconfig secrets are needed; the Kind action wires KUBECONFIG automatically. If you previously added `KUBE_CONFIG`/`KUBE_API_SERVER` secrets for CI testing, you can remove them when using this workflow.
+
 ## 📝 Resource Limits
 
 The application is configured with the following resource limits:

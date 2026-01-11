@@ -1,0 +1,75 @@
+name: Kind Kubernetes smoke test
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  kind-smoke:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: latest
+
+      - name: Create Kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: ci-kind
+
+      - name: Verify cluster
+        run: |
+          kubectl cluster-info
+          kubectl get nodes -o wide
+
+      - name: Deploy sample app
+        run: |
+          kubectl create namespace sample --dry-run=client -o yaml | kubectl apply -f -
+          cat <<'EOF' | kubectl apply -f -
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: hello-web
+            namespace: sample
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: hello-web
+            template:
+              metadata:
+                labels:
+                  app: hello-web
+              spec:
+                containers:
+                  - name: hello-web
+                    image: docker.io/library/nginx:1.27-alpine
+                    ports:
+                      - containerPort: 80
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: hello-web
+            namespace: sample
+          spec:
+            type: ClusterIP
+            selector:
+              app: hello-web
+            ports:
+              - port: 80
+                targetPort: 80
+          EOF
+
+      - name: Validate rollout
+        run: |
+          kubectl -n sample rollout status deployment/hello-web --timeout=120s
+          kubectl -n sample get pods,svc
