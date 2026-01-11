@@ -5,105 +5,79 @@ on:
     branches: [main, master]
 
 jobs:
-  # -------------------------------
-  # Job 1: Build Docker image
-  # -------------------------------
-  build:
+  ci-deploy:
     runs-on: ubuntu-latest
-    outputs:
-      image-tag: ${{ steps.set-tag.outputs.image-tag }}
     steps:
-      # Checkout repo
+      # -------------------------------
+      # Step 1: Checkout repo
+      # -------------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Enable Qemu for multi-arch builds
-      - name: Set up Qemu
-        uses: docker/setup-buildx-action@v2
-
-      # Docker Hub login (optional if you want to push later)
-      - name: Login to Docker Hub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      # Set image tag
+      # -------------------------------
+      # Step 2: Set image tag
+      # -------------------------------
       - name: Set image tag
         id: set-tag
         run: echo "image-tag=${GITHUB_SHA}" >> $GITHUB_OUTPUT
 
-      # Build Docker image and load locally for Kind
-      - name: Build Docker image for CI
-        uses: docker/build-push-action@v4
-        with:
-          context: ./backend
-          push: false      # Do NOT push yet
-          load: true       # Load image into local Docker
-          tags: |
-            backend:${{ steps.set-tag.outputs.image-tag }}
-            backend:latest
+      # -------------------------------
+      # Step 3: Build Docker image locally
+      # -------------------------------
+      - name: Build backend Docker image
+        run: |
+          docker build -t backend:${{ steps.set-tag.outputs.image-tag }} ./backend
+          docker tag backend:${{ steps.set-tag.outputs.image-tag }} backend:latest
 
-      # Optional: push to Docker Hub after local load
-      - name: Push image to Docker Hub
-        uses: docker/build-push-action@v4
-        with:
-          context: ./backend
-          push: true
-          tags: |
-            ${{ secrets.DOCKER_USERNAME }}/backend:${{ steps.set-tag.outputs.image-tag }}
-            ${{ secrets.DOCKER_USERNAME }}/backend:latest
-
-  # -------------------------------
-  # Job 2: Deploy & test on Kind
-  # -------------------------------
-  deploy:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      # Checkout repo
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      # Install Kind and kubectl
+      # -------------------------------
+      # Step 4: Install Kind & kubectl
+      # -------------------------------
       - name: Install Kind & kubectl
         run: |
+          # Install kind
           curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.26.0/kind-linux-amd64
           chmod +x ./kind
           sudo mv ./kind /usr/local/bin/kind
+          # Install kubectl
           curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
           chmod +x kubectl
           sudo mv kubectl /usr/local/bin/kubectl
 
-      # Create Kind cluster
+      # -------------------------------
+      # Step 5: Create Kind cluster
+      # -------------------------------
       - name: Create Kind cluster
         run: kind create cluster --name ci-cluster --wait 60s
 
-      # Verify cluster
-      - name: Cluster info
-        run: kubectl cluster-info
+      # -------------------------------
+      # Step 6: Load Docker image into Kind
+      # -------------------------------
+      - name: Load Docker image into Kind
+        run: kind load docker-image backend:${{ steps.set-tag.outputs.image-tag }} --name ci-cluster
 
-      # Load built Docker image into Kind
-      - name: Load backend image into Kind
-        run: |
-          kind load docker-image backend:${{ needs.build.outputs.image-tag }} --name ci-cluster
-
-      # Deploy Kubernetes manifests
-      - name: Apply manifests
+      # -------------------------------
+      # Step 7: Apply Kubernetes manifests
+      # -------------------------------
+      - name: Deploy manifests to cluster
         run: |
           kubectl apply -f k8s/namespace.yaml
           kubectl apply -f k8s/secret.yaml
           kubectl apply -f k8s/mysql-pvc.yaml
           kubectl apply -f k8s/mysql-deployment.yaml
-          kubectl set image deployment/backend backend=backend:${{ needs.build.outputs.image-tag }} --record
+          # Set the backend image to the one we just built
+          kubectl set image deployment/backend backend=backend:${{ steps.set-tag.outputs.image-tag }} --record
           kubectl apply -f k8s/backend-deployment.yaml
           kubectl apply -f k8s/ingress.yaml
 
-      # Wait for backend rollout
+      # -------------------------------
+      # Step 8: Wait for backend rollout
+      # -------------------------------
       - name: Wait for backend rollout
         run: kubectl -n myapp rollout status deployment/backend --timeout=120s
 
-      # Optional: test backend service
+      # -------------------------------
+      # Step 9: Optional test
+      # -------------------------------
       - name: Test backend service
         run: |
           kubectl -n myapp port-forward svc/backend 8080:3000 &
