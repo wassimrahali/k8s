@@ -6,7 +6,7 @@ on:
 
 jobs:
   # -------------------------------
-  # Job 1: Build and push Docker image
+  # Job 1: Build Docker image
   # -------------------------------
   build:
     runs-on: ubuntu-latest
@@ -21,7 +21,7 @@ jobs:
       - name: Set up Qemu
         uses: docker/setup-buildx-action@v2
 
-      # Docker Hub login
+      # Docker Hub login (optional if you want to push later)
       - name: Login to Docker Hub
         uses: docker/login-action@v2
         with:
@@ -33,8 +33,19 @@ jobs:
         id: set-tag
         run: echo "image-tag=${GITHUB_SHA}" >> $GITHUB_OUTPUT
 
-      # Build & push backend image
-      - name: Build & push backend image
+      # Build Docker image and load locally for Kind
+      - name: Build Docker image for CI
+        uses: docker/build-push-action@v4
+        with:
+          context: ./backend
+          push: false      # Do NOT push yet
+          load: true       # Load image into local Docker
+          tags: |
+            backend:${{ steps.set-tag.outputs.image-tag }}
+            backend:latest
+
+      # Optional: push to Docker Hub after local load
+      - name: Push image to Docker Hub
         uses: docker/build-push-action@v4
         with:
           context: ./backend
@@ -44,38 +55,38 @@ jobs:
             ${{ secrets.DOCKER_USERNAME }}/backend:latest
 
   # -------------------------------
-  # Job 2: Test deployment on Kind (free Kubernetes)
+  # Job 2: Deploy & test on Kind
   # -------------------------------
   deploy:
     runs-on: ubuntu-latest
     needs: build
     steps:
+      # Checkout repo
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # Install kind & kubectl
-      - name: Set up kind & kubectl
+      # Install Kind and kubectl
+      - name: Install Kind & kubectl
         run: |
           curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.26.0/kind-linux-amd64
           chmod +x ./kind
           sudo mv ./kind /usr/local/bin/kind
           curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
           chmod +x kubectl
-          sudo mv kubectl /usr/local/bin/
+          sudo mv kubectl /usr/local/bin/kubectl
 
-      # Create a temporary Kubernetes cluster in Docker
+      # Create Kind cluster
       - name: Create Kind cluster
-        run: |
-          kind create cluster --name ci-cluster --wait 60s
+        run: kind create cluster --name ci-cluster --wait 60s
 
       # Verify cluster
       - name: Cluster info
         run: kubectl cluster-info
 
-      # Load Docker image into Kind
-      - name: Load backend image into cluster
+      # Load built Docker image into Kind
+      - name: Load backend image into Kind
         run: |
-          kind load docker-image ${{ secrets.DOCKER_USERNAME }}/backend:${{ needs.build.outputs.image-tag }} --name ci-cluster
+          kind load docker-image backend:${{ needs.build.outputs.image-tag }} --name ci-cluster
 
       # Deploy Kubernetes manifests
       - name: Apply manifests
@@ -84,20 +95,17 @@ jobs:
           kubectl apply -f k8s/secret.yaml
           kubectl apply -f k8s/mysql-pvc.yaml
           kubectl apply -f k8s/mysql-deployment.yaml
-          # Replace backend image with the freshly built image
-          kubectl set image deployment/backend backend=${{ secrets.DOCKER_USERNAME }}/backend:${{ needs.build.outputs.image-tag }} --record
+          kubectl set image deployment/backend backend=backend:${{ needs.build.outputs.image-tag }} --record
           kubectl apply -f k8s/backend-deployment.yaml
           kubectl apply -f k8s/ingress.yaml
 
       # Wait for backend rollout
       - name: Wait for backend rollout
-        run: |
-          kubectl -n myapp rollout status deployment/backend --timeout=120s
+        run: kubectl -n myapp rollout status deployment/backend --timeout=120s
 
-      # Optional: Run tests against the cluster
-      - name: Run integration tests
+      # Optional: test backend service
+      - name: Test backend service
         run: |
-          # Example: run a curl test against the backend service
-          kubectl port-forward -n myapp svc/backend 8080:3000 &
+          kubectl -n myapp port-forward svc/backend 8080:3000 &
           sleep 10
           curl -f http://localhost:8080/health || exit 1
