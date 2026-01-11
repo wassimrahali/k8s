@@ -1,37 +1,50 @@
-name: CI/CD with Kind Kubernetes
+name: CI/CD with Kind Kubernetes (separate jobs)
 
 on:
   push:
     branches: [main, master]
 
 jobs:
-  ci-deploy:
+  # -------------------------------
+  # Job 1: Build Docker images
+  # -------------------------------
+  build:
     runs-on: ubuntu-latest
+    outputs:
+      backend-image: ${{ steps.set-backend.outputs.tag }}
     steps:
-      # -------------------------------
-      # Step 1: Checkout repo
-      # -------------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
-      # -------------------------------
-      # Step 2: Set image tag
-      # -------------------------------
       - name: Set image tag
-        id: set-tag
-        run: echo "image-tag=${GITHUB_SHA}" >> $GITHUB_OUTPUT
+        id: set-backend
+        run: echo "tag=${GITHUB_SHA}" >> $GITHUB_OUTPUT
 
-      # -------------------------------
-      # Step 3: Build Docker image locally
-      # -------------------------------
-      - name: Build backend Docker image
-        run: |
-          docker build -t backend:${{ steps.set-tag.outputs.image-tag }} ./backend
-          docker tag backend:${{ steps.set-tag.outputs.image-tag }} backend:latest
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # -------------------------------
-      # Step 4: Install Kind & kubectl
-      # -------------------------------
+      - name: Build & push backend Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/backend:${{ steps.set-backend.outputs.tag }}
+            ${{ secrets.DOCKER_USERNAME }}/backend:latest
+
+  # -------------------------------
+  # Job 2: Deploy to Kind
+  # -------------------------------
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Install Kind & kubectl
         run: |
           curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.26.0/kind-linux-amd64
@@ -41,53 +54,41 @@ jobs:
           chmod +x kubectl
           sudo mv kubectl /usr/local/bin/kubectl
 
-      # -------------------------------
-      # Step 5: Create Kind cluster
-      # -------------------------------
       - name: Create Kind cluster
         run: kind create cluster --name ci-cluster --wait 60s
 
-      # -------------------------------
-      # Step 6: Load Docker image into Kind
-      # -------------------------------
-      - name: Load Docker image into Kind
-        run: kind load docker-image backend:${{ steps.set-tag.outputs.image-tag }} --name ci-cluster
+      - name: Pull backend image from Docker Hub
+        run: docker pull ${{ secrets.DOCKER_USERNAME }}/backend:${{ needs.build.outputs.backend-image }}
 
-      # -------------------------------
-      # Step 7: Deploy all Kubernetes manifests
-      # -------------------------------
-      - name: Deploy manifests to cluster
+      - name: Load backend image into Kind
+        run: kind load docker-image ${{ secrets.DOCKER_USERNAME }}/backend:${{ needs.build.outputs.backend-image }} --name ci-cluster
+
+      - name: Deploy Kubernetes manifests
         run: |
-          IMAGE=backend:${{ steps.set-tag.outputs.image-tag }}
+          IMAGE=${{ secrets.DOCKER_USERNAME }}/backend:${{ needs.build.outputs.backend-image }}
 
-          # Create namespace, secrets, PVCs, MySQL first
+          # Apply namespace, secrets, MySQL first
           kubectl apply -f k8s/namespace.yaml
           kubectl apply -f k8s/secret.yaml
           kubectl apply -f k8s/mysql-pvc.yaml
           kubectl apply -f k8s/mysql-deployment.yaml
-          kubectl apply -f k8s/mysql-service.yaml || true
 
-          # Apply backend deployment
+          # Deploy backend
           kubectl apply -f k8s/backend-deployment.yaml
-
-          # Apply backend Service BEFORE port-forward
           kubectl apply -f k8s/backend-service.yaml
 
-          # Update backend image in deployment
+          # Update backend image
           kubectl -n myapp set image deployment/backend backend=$IMAGE
 
-          # Apply ingress
+          # Apply frontend & ingress
+          kubectl apply -f k8s/frontend-deployment.yaml
+          kubectl apply -f k8s/frontend-service.yaml
           kubectl apply -f k8s/ingress.yaml
+          kubectl apply -f k8s/hpa.yaml || true
 
-      # -------------------------------
-      # Step 8: Wait for backend rollout
-      # -------------------------------
       - name: Wait for backend rollout
         run: kubectl -n myapp rollout status deployment/backend --timeout=120s
 
-      # -------------------------------
-      # Step 9: Test backend service
-      # -------------------------------
       - name: Test backend service
         run: |
           kubectl -n myapp port-forward svc/backend 8080:3000 &
